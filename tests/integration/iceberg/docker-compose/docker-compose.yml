@@ -1,0 +1,88 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+services:
+  spark-iceberg:
+    container_name: pyiceberg-spark
+    build: .
+    networks:
+      iceberg_net:
+    depends_on:
+      rest:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+    volumes:
+    - ./warehouse:/home/iceberg/warehouse
+    - ./provision.py:/opt/spark/provision.py
+    environment:
+    - AWS_ACCESS_KEY_ID=admin
+    - AWS_SECRET_ACCESS_KEY=password
+    - AWS_REGION=us-east-1
+    ports:
+    - 8888:8888
+    - 8080:8080
+    links:
+    - rest:rest
+    - seaweedfs:seaweedfs
+  rest:
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    image: tabulario/iceberg-rest
+    container_name: pyiceberg-rest
+    networks:
+      iceberg_net:
+    ports:
+    - 8181:8181
+    environment:
+    - AWS_ACCESS_KEY_ID=admin
+    - AWS_SECRET_ACCESS_KEY=password
+    - AWS_REGION=us-east-1
+    - CATALOG_WAREHOUSE=s3://warehouse/
+    - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+    - CATALOG_S3_ENDPOINT=http://seaweedfs:9000
+    volumes:
+    - ./healthcheck.sh:/healthcheck.sh
+    healthcheck:
+      test: ["CMD", "bash", "/healthcheck.sh"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+    container_name: pyiceberg-seaweedfs
+    environment:
+    - AWS_ACCESS_KEY_ID=admin
+    - AWS_SECRET_ACCESS_KEY=password
+    - S3_BUCKET=warehouse
+    networks:
+      iceberg_net:
+        aliases:
+        - warehouse.seaweedfs
+    ports:
+    - "127.0.0.1:9000:9000"
+    command: [mini, -dir=/data, -s3.port=9000, -s3.domainName=seaweedfs]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:9000/ | grep -qx 403"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+networks:
+  iceberg_net:
